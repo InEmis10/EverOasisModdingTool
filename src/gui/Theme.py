@@ -31,3 +31,16 @@ class Theme:
 
     STATUS_OK = Color3(120, 200, 120)
     STATUS_ERROR = Color3(235, 110, 100)
+
+    CODE_FONT = _FindFont("adwaitamono", "liberationmono", "monospace")
+    CODE_TEXT_SIZE = 13
+    CODE_BACKGROUND = Color3(30, 31, 34)
+    CODE_GUTTER = Color3(37, 38, 41)
+    CODE_LINE_NUMBER = Color3(100, 102, 108)
+    CODE_TEXT = Color3(212, 212, 212)
+    CODE_KEYWORD = Color3(204, 120, 50)
+    CODE_STRING = Color3(106, 171, 115)
+    CODE_NUMBER = Color3(104, 151, 187)
+    CODE_COMMENT = Color3(128, 128, 128)
+    CODE_FUNCTION = Color3(255, 198, 109)
+    CODE_CONSTANT = Color3(152, 118, 170)

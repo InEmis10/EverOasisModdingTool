@@ -8,11 +8,12 @@ from pygame_easy_gui import TimeService
 from pathlib import Path
 import subprocess
 from src import Event
-from src.gui.element.TreeContainer import TreeContainer
 from src.gui.Theme import Theme
 from pygame_easy_gui import UserInputService, InputObject, UserInputState, UserInputType
 from pygame_easy_gui import TextLabel
-from src.gui.element.ToolMenu import ToolMenu
+from src.gui.element.ContextMenu import ContextMenu, MenuItem
+from src.gui.element.ScreenBar import ScreenBar
+from src.gui.page.Screen import Screen
 from src.classe.ModTools import GetTools, RunTool, ToolResult
 
 def AskDirectory(callback, title, start):
@@ -43,8 +44,8 @@ def OnOpenClicked():
 
 
 TOPBAR_HEIGHT = 30
-SIDEBAR_WIDTH = 220
 STATUS_HEIGHT = 22
+SCREENBAR_LEFT = 220
 
 
 def StylePanel(frame: Frame, color: Color3, name: str):
@@ -215,35 +216,28 @@ class MainPage(ScreenGui):
         self.Size = Udim2(1, 0, 1, 0)
         self.Position = Udim2(0, 0, 0, 0)
         self.Name = "MainPage"
-        self.ProjectTree = None
+        self.Screens: list[Screen] = []
+        self.ActiveScreen: Screen | None = None
+        self.ContextMenu: ContextMenu | None = None
 
-        self.SideBar = TreeContainer()
-        StylePanel(self.SideBar, Theme.SIDEBAR, "SideBar")
-        self.SideBar.Position = Udim2(0, 0, 0, TOPBAR_HEIGHT)
-        self.SideBar.Size = Udim2(0, SIDEBAR_WIDTH, 1, -TOPBAR_HEIGHT)
-        self.AddChild(self.SideBar)
+        self.ScreenArea = Frame()
+        self.ScreenArea.Name = "ScreenArea"
+        self.ScreenArea.BackgroundColor3 = Theme.BACKGROUND
+        self.ScreenArea.Position = Udim2(0, 0, 0, TOPBAR_HEIGHT)
+        self.ScreenArea.Size = Udim2(1, 0, 1, -TOPBAR_HEIGHT - STATUS_HEIGHT)
+        self.AddChild(self.ScreenArea)
 
-        self.Content = Frame()
-        StylePanel(self.Content, Theme.BACKGROUND, "Content")
-        self.Content.Position = Udim2(0, SIDEBAR_WIDTH, 0, TOPBAR_HEIGHT)
-        self.Content.Size = Udim2(1, -SIDEBAR_WIDTH, 1, -TOPBAR_HEIGHT - STATUS_HEIGHT)
-        self.AddChild(self.Content)
-
-        # Barre d'état : résultat des outils
         self.StatusBar = TextLabel()
         StylePanel(self.StatusBar, Theme.TOPBAR, "StatusBar")
-        self.StatusBar.Position = Udim2(0, SIDEBAR_WIDTH, 1, -STATUS_HEIGHT)
-        self.StatusBar.Size = Udim2(1, -SIDEBAR_WIDTH, 0, STATUS_HEIGHT)
+        self.StatusBar.Position = Udim2(0, 0, 1, -STATUS_HEIGHT)
+        self.StatusBar.Size = Udim2(1, 0, 0, STATUS_HEIGHT)
         self.StatusBar.FontName = Theme.TREE_FONT
         self.StatusBar.TextSize = 13
         self.StatusBar.TextXAlignment = "left"
         self.StatusBar.TextTruncate = "atend"
         self.StatusBar.AddChild(UIPadding(PaddingLeft=Udim(0, 8), PaddingRight=Udim(0, 8)))
-        self.SetStatus("Clic droit sur un fichier pour l'extraire vers modified/")
+        self.SetStatus("File > Open pour ouvrir un projet")
         self.AddChild(self.StatusBar)
-
-        self.ToolMenu: ToolMenu | None = None
-        self.SideBar.NodeContextMenu.Connect(self.OnNodeContextMenu)
 
         self.OnPathRefresh = Signal()
         self.OnPathRefresh.Connect(self.OnPathRefreshEvent)
@@ -251,35 +245,86 @@ class MainPage(ScreenGui):
         self.TopBar = MainPageTopBar()
         self.AddChild(self.TopBar)
 
+        self.ScreenBar = ScreenBar()
+        self.ScreenBar.Position = Udim2(0, SCREENBAR_LEFT, 0, 0)
+        self.ScreenBar.Size = Udim2(1, -SCREENBAR_LEFT, 0, TOPBAR_HEIGHT)
+        self.ScreenBar.ZIndex = 5
+        self.ScreenBar.Selected.Connect(self.SwitchScreen)
+        self.ScreenBar.CloseRequested.Connect(self.CloseScreen)
+        self.AddChild(self.ScreenBar)
+
         Event.OpenProject.Connect(self.LoadSideBarProjectFile)
+
+    @property
+    def ProjectTree(self):
+        return self.Screens[0].SideBar.Root if self.Screens else None
 
     def LoadSideBarProjectFile(self, path: Path):
         if path is None or not path.is_dir():
             return
-
-        # Remplace l'arbre du projet précédent (le projet est ouvert d'emblée)
-        self.ProjectTree = self.SideBar.SetRoot(path)
+        for screen in self.Screens:
+            screen.Destroy()
+        self.Screens = []
+        self.ActiveScreen = None
+        self.AddScreen(path, path.name, closable=False)
+        self.SetStatus("Clic gauche : ouvrir un fichier · clic droit : outils / nouvel écran depuis un dossier")
 
     def OnPathRefreshEvent(self):
         pass
 
-    # Outils d'extraction
+    def AddScreen(self, root: Path, title: str, closable: bool = True) -> Screen:
+        """Crée un écran dont l'arbre démarre à root (ou affiche celui qui existe déjà)."""
+        for screen in self.Screens:
+            if screen.Root == root:
+                self.SwitchScreen(screen)
+                return screen
+        screen = Screen(root, title, closable)
+        screen.ContextMenuRequested.Connect(lambda node, s=screen: self.OnNodeContextMenu(s, node))
+        self.Screens.append(screen)
+        self.ScreenArea.AddChild(screen)
+        self.SwitchScreen(screen)
+        return screen
+
+    def SwitchScreen(self, screen: Screen):
+        self.ActiveScreen = screen
+        for other in self.Screens:
+            other.Visible = other is screen
+        self.ScreenBar.Refresh(self.Screens, screen)
+
+    def CloseScreen(self, screen: Screen):
+        if not screen.Closable or screen not in self.Screens:
+            return
+        index = self.Screens.index(screen)
+        self.Screens.remove(screen)
+        screen.Destroy()
+        if self.ActiveScreen is screen:
+            self.SwitchScreen(self.Screens[max(0, index - 1)])
+        else:
+            self.ScreenBar.Refresh(self.Screens, self.ActiveScreen)
+
     def SetStatus(self, text: str, color=Theme.TREE_ARROW):
         self.StatusBar.Text = text
         self.StatusBar.TextColor3 = color
 
-    def OnNodeContextMenu(self, node):
-        """Clic droit sur une ligne de l'arbre : un fichier ouvre le menu des outils"""
+    def OnNodeContextMenu(self, screen: Screen, node):
         if node.IsDir:
-            return
-        if self.ToolMenu is not None:
-            self.ToolMenu.Close()
-        menu = ToolMenu(node.Path, GetTools(node.Path), UserInputService.GetMouseLocation() + (8, 4))
-        menu.Chosen.Connect(lambda tool, path=node.Path: self.RunTool(tool, path))
-        menu.Closed.Connect(lambda: setattr(self, "ToolMenu", None) if self.ToolMenu is menu else None)
+            items = [MenuItem("Nouvel écran depuis ce dossier", "édite ce dossier à part, sans le reste du projet",
+                              lambda: self.AddScreen(node.Path, node.Name))]
+        else:
+            items = [MenuItem("Ouvrir dans un onglet", "affiche le fichier dans cet écran",
+                              lambda: screen.OpenFile(node.Path))]
+            items += [MenuItem(tool.Name, tool.Description, lambda tool=tool: self.RunTool(tool, node.Path))
+                      for tool in GetTools(node.Path)]
+        self.ShowContextMenu(node.Path, items)
+
+    def ShowContextMenu(self, path: Path, items: list[MenuItem]):
+        if self.ContextMenu is not None:
+            self.ContextMenu.Close()
+        menu = ContextMenu(path, items, UserInputService.GetMouseLocation() + (8, 4))
+        menu.Closed.Connect(lambda: setattr(self, "ContextMenu", None) if self.ContextMenu is menu else None)
         self.AddChild(menu)
         menu.ClampToScreen(self.GetAbsSize())
-        self.ToolMenu = menu
+        self.ContextMenu = menu
 
     def RunTool(self, tool, path: Path):
         self.SetStatus(f"{tool.Name} : {path.name}…", Theme.TEXT)
@@ -287,6 +332,7 @@ class MainPage(ScreenGui):
         def Done(result: ToolResult):
             self.SetStatus(result.Message, Theme.STATUS_OK if result.Success else Theme.STATUS_ERROR)
             if result.Output is not None:
-                self.SideBar.Reload(result.Output)   # fait apparaître la sortie dans l'arbre
+                for screen in self.Screens:
+                    screen.SideBar.Reload(result.Output)
 
         RunTool(tool, path, Done)

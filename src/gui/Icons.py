@@ -91,7 +91,13 @@ def _Doc(S, x, y, c):              # page avec coin plié
     pygame.draw.lines(S, c, False, [(x + 7, y), (x + 7, y + 3), (x + 10, y + 3)])
 
 
+def _Folder(S, x, y, c):
+    pygame.draw.polygon(S, c, [(x, y + 2), (x + 4, y + 2), (x + 5, y + 4), (x + 12, y + 4), (x + 12, y + 11), (x, y + 11)], 1)
+    pygame.draw.line(S, c, (x, y + 5), (x + 11, y + 5))
+
+
 _ICONS = {
+    "folder": _Folder,
     "archive": _Archive, "image": _Image, "cube": _Cube, "film": _Film, "code": _Code,
     "chip": _Chip, "text": _Text, "note": _Note, "table": _Table, "window": _Window,
     "spark": _Spark, "doc": _Doc,

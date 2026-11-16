@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -52,11 +53,12 @@ def RelativeInWorkspace(path: Path, workspace: Path) -> Path:
     return path.relative_to(workspace)
 
 
-def FindToolDir(workspace: Path) -> Path:
+def FindToolDir(workspace: Path | None) -> Path:
     candidates = []
     if os.environ.get("EVEROASIS_TOOLS"):
         candidates.append(os.environ["EVEROASIS_TOOLS"])
-    candidates += [c.format(workspace=workspace) for c in TOOL_DIR_CANDIDATES]
+    candidates += [c.format(workspace=workspace) for c in TOOL_DIR_CANDIDATES
+                   if workspace is not None or "{workspace}" not in c]
     for c in candidates:
         folder = Path(c).expanduser().resolve()
         if (folder / "extract").is_file():
@@ -110,6 +112,51 @@ def GetTools(path: Path) -> list[ExtractTool]:
 
 
 # Exécution
+def RunAsync(command: list, on_done: Callable[[int, str, str], None]) -> None:
+    """Lance command sans bloquer l'interface ; on_done(code, stdout, stderr) est appelé sur le thread principal.
+    La sortie est lue pendant l'exécution (sinon un outil bavard se bloque quand le tampon du pipe est plein)."""
+    result = {}
+
+    def Worker():
+        try:
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    encoding="utf-8", errors="replace",
+                                    env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+            out, err = proc.communicate()
+            result["value"] = (proc.returncode, out, err)
+        except OSError as e:
+            result["value"] = (-1, "", str(e))
+
+    thread = threading.Thread(target=Worker, daemon=True)
+    thread.start()
+
+    def Check():
+        if thread.is_alive():
+            return
+        timer.Cancel()
+        on_done(*result["value"])
+
+    timer = TimeService.Every(0.05, Check)
+
+
+def DecompileToText(source: Path, on_done: Callable[[str | None, str], None]) -> None:
+    """Décompile un .gsb en Squirrel ; on_done(texte, "") ou on_done(None, erreur)."""
+    try:
+        tools = FindToolDir(FindWorkspace(source.parent))
+    except ToolError as e:
+        on_done(None, str(e))
+        return
+
+    def Done(code, out, err):
+        if code == 0 and out.strip():
+            on_done(out.rstrip("\n") + "\n", "")
+        else:
+            lines = (err or out).strip().splitlines()
+            on_done(None, lines[-1] if lines else f"code {code}")
+
+    RunAsync([sys.executable, str(tools / "decompile"), str(source), "-o", "-"], Done)
+
+
 @dataclass
 class ToolResult:
     Success: bool
@@ -134,23 +181,18 @@ def RunTool(tool: ExtractTool, source: Path, on_done: Callable[[ToolResult], Non
             on_done(ToolResult(True, f"copié vers {out.relative_to(workspace)}", out))
             return
 
-        proc = subprocess.Popen(tool.Command(FindToolDir(workspace), source, out),
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        command = tool.Command(FindToolDir(workspace), source, out)
     except (ToolError, OSError, ValueError) as e:
         on_done(ToolResult(False, str(e)))
         return
 
-    def Check():
-        if proc.poll() is None:
-            return
-        timer.Cancel()
-        log = proc.stdout.read().strip()
-        proc.stdout.close()
+    def Done(code, stdout, stderr):
+        log = (stdout + "\n" + stderr).strip()
         errors = [line for line in log.splitlines() if "ERREUR" in line or "Error" in line]
-        if proc.returncode == 0 and out.exists() and not errors:
+        if code == 0 and out.exists() and not errors:
             on_done(ToolResult(True, f"{tool.Name} → {out.relative_to(workspace)}", out))
         else:
-            detail = (errors or log.splitlines() or [f"code {proc.returncode}"])[-1]
+            detail = (errors or log.splitlines() or [f"code {code}"])[-1]
             on_done(ToolResult(False, f"{tool.Name} a échoué : {detail}", out if out.exists() else None))
 
-    timer = TimeService.Every(0.1, Check)
+    RunAsync(command, Done)
