@@ -1,8 +1,10 @@
 from pathlib import Path
+import struct
 import pygame
 from pygame_easy_gui import Frame, TextLabel, UIListLayout, UIPadding, Udim, Udim2
 from src.classe.FileTypes import GetFileType
 from src.classe.ModTools import FindWorkspace, GetTools, DecompileToText
+from src.bin.tools.DbdReader import BdbReader
 from src.gui.element.CodeView import CodeView
 from src.gui import Icons
 from src.gui.Theme import Theme
@@ -137,9 +139,36 @@ class CodeFileView(Frame):
         self.Header.Text = f"{GetFileType(self.Path).Description} · lecture seule · {len(self.Code.Lines)} lignes"
 
 
+class BdbFileView(CodeFileView):
+    """Onglet d'une base de données .bdb : la table en texte aligné, en lecture seule."""
+
+    def __init__(self, path: Path):
+        super().__init__(path)
+        self.Name = f"BdbFileView:{path.name}"
+
+    def _LoadText(self):
+        try:
+            bdb = BdbReader.read(self.Path)
+        except (OSError, struct.error, KeyError, IndexError) as e:
+            bdb, error = None, f"fichier .bdb illisible : {e}"
+        else:
+            error = "ce n'est pas un fichier .bdb"
+        if bdb is None:
+            self.Header.Text = "Lecture impossible"
+            self.Code.SetMessage(error, Theme.STATUS_ERROR)
+            return
+        self.Bdb = bdb
+        self.Code.SetText(bdb.render())
+        header = bdb.header
+        self.Header.Text = (f"Base de données · lecture seule · {header['lineCount']} lignes"
+                            f" · {header['columns']} colonnes · {header['lineSize']} octets par ligne")
+
+
 def CreateView(path: Path) -> Frame:
     """Vue adaptée au type du fichier ouvert dans un onglet."""
     extension = path.suffix.lower().lstrip(".")
+    if extension == "bdb":
+        return BdbFileView(path)
     if extension == "gsb" or extension in TEXT_EXTENSIONS:
         return CodeFileView(path)
     return FileView(path)
